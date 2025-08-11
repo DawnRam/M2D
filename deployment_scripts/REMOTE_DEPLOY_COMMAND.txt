@@ -1,0 +1,54 @@
+# PanDerm-Diffusion 远程服务器一键部署命令
+
+## 使用方法
+
+将以下命令复制到您的远程GPU服务器终端执行：
+
+### 完整一键部署命令（替换YOUR_REPO_URL）
+```bash
+git clone YOUR_REPO_URL && cd PanDerm-Diffusion && chmod +x deploy_remote.sh && ./deploy_remote.sh
+```
+
+### 具体示例（需要替换为您的实际GitHub仓库地址）
+```bash
+git clone https://github.com/yourusername/PanDerm-Diffusion.git && cd PanDerm-Diffusion && chmod +x deploy_remote.sh && ./deploy_remote.sh
+```
+
+## 命令解释
+
+1. `git clone YOUR_REPO_URL` - 克隆GitHub仓库
+2. `cd PanDerm-Diffusion` - 进入项目目录  
+3. `chmod +x deploy_remote.sh` - 给部署脚本执行权限
+4. `./deploy_remote.sh` - 运行自动部署脚本
+
+## 部署脚本会做什么
+
+✅ 检查Python和CUDA环境
+✅ 创建虚拟环境并安装依赖
+✅ 根据CUDA版本安装对应PyTorch
+✅ 设置模拟数据集和配置
+✅ 运行系统完整性检查
+✅ 提供多种训练选项
+
+## 部署完成后的快速训练命令
+
+```bash
+# 激活环境（如果未激活）
+source panderm_env/bin/activate
+
+# 快速测试（5个epoch）
+python scripts/train.py --data_root ./data/ISIC --epochs 5 --batch_size 4
+
+# 完整训练（需先 wandb login）
+python scripts/train.py --data_root ./data/ISIC --epochs 100 --batch_size 16 --use_wandb --wandb_project "panderm-diffusion"
+
+# 后台训练
+nohup python scripts/train.py --data_root ./data/ISIC --epochs 100 --batch_size 16 --use_wandb --wandb_project "panderm-diffusion" > training.log 2>&1 &
+```
+
+## 注意事项
+
+- 确保远程服务器有Python 3.8+
+- 建议使用带CUDA的GPU服务器
+- 首次运行建议先执行快速测试
+- 使用WandB需要先登录: `wandb login`
