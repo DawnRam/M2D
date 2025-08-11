@@ -4,6 +4,16 @@ import torch.nn.functional as F
 from typing import Dict, Optional, Tuple
 import timm
 from transformers import AutoModel, AutoConfig
+import os
+import sys
+
+# 添加配置路径
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+try:
+    from configs.model_paths import PANDERM_MODEL_PATHS, USE_VIT_SUBSTITUTE
+except ImportError:
+    PANDERM_MODEL_PATHS = {}
+    USE_VIT_SUBSTITUTE = True
 
 
 class PanDermFeatureExtractor(nn.Module):
@@ -30,24 +40,80 @@ class PanDermFeatureExtractor(nn.Module):
         self.feature_dim = feature_dim
         self.output_layers = output_layers
         
-        # 加载预训练模型（这里使用ViT作为替代实现）
-        # 实际项目中需要加载真正的PanDerm模型权重
-        if "large" in model_name.lower():
-            self.backbone = timm.create_model(
-                'vit_large_patch16_224', 
-                pretrained=True,
-                num_classes=0,  # 移除分类头
-                global_pool=''  # 移除全局池化
-            )
-            backbone_dim = 1024
+        # 尝试加载真实的PanDerm模型
+        panderm_path = PANDERM_MODEL_PATHS.get(model_name)
+        
+        if not USE_VIT_SUBSTITUTE and panderm_path and os.path.exists(panderm_path):
+            print(f"✓ 加载PanDerm预训练模型: {panderm_path}")
+            
+            # 首先创建ViT backbone结构
+            if "large" in model_name.lower():
+                self.backbone = timm.create_model(
+                    'vit_large_patch16_224', 
+                    pretrained=False,  # 不加载ImageNet权重
+                    num_classes=0,
+                    global_pool=''
+                )
+                backbone_dim = 1024
+            else:
+                self.backbone = timm.create_model(
+                    'vit_base_patch16_224',
+                    pretrained=False,  # 不加载ImageNet权重
+                    num_classes=0,
+                    global_pool=''
+                )
+                backbone_dim = 768
+            
+            # 加载PanDerm预训练权重
+            try:
+                checkpoint = torch.load(panderm_path, map_location='cpu')
+                
+                # 处理不同格式的checkpoint
+                if isinstance(checkpoint, dict):
+                    if 'state_dict' in checkpoint:
+                        state_dict = checkpoint['state_dict']
+                    elif 'model' in checkpoint:
+                        state_dict = checkpoint['model']
+                    else:
+                        state_dict = checkpoint
+                else:
+                    state_dict = checkpoint
+                
+                # 加载权重，允许部分匹配
+                missing_keys, unexpected_keys = self.backbone.load_state_dict(state_dict, strict=False)
+                
+                if missing_keys:
+                    print(f"⚠ PanDerm模型缺失的键: {len(missing_keys)} 个")
+                if unexpected_keys:
+                    print(f"⚠ PanDerm模型未预期的键: {len(unexpected_keys)} 个")
+                    
+                print(f"✓ 成功加载PanDerm预训练权重")
+                
+            except Exception as e:
+                print(f"⚠ 加载PanDerm权重失败: {e}")
+                print("  使用随机初始化的ViT backbone")
         else:
-            self.backbone = timm.create_model(
-                'vit_base_patch16_224',
-                pretrained=True, 
-                num_classes=0,
-                global_pool=''
-            )
-            backbone_dim = 768
+            # 使用ViT作为替代
+            if not USE_VIT_SUBSTITUTE:
+                print(f"⚠ PanDerm模型文件不存在: {panderm_path}")
+            print("  使用预训练的ViT模型作为替代")
+            
+            if "large" in model_name.lower():
+                self.backbone = timm.create_model(
+                    'vit_large_patch16_224', 
+                    pretrained=True,  # 使用ImageNet预训练权重
+                    num_classes=0,
+                    global_pool=''
+                )
+                backbone_dim = 1024
+            else:
+                self.backbone = timm.create_model(
+                    'vit_base_patch16_224',
+                    pretrained=True,  # 使用ImageNet预训练权重
+                    num_classes=0,
+                    global_pool=''
+                )
+                backbone_dim = 768
         
         # 特征投影层
         if backbone_dim != feature_dim:

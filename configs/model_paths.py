@@ -8,36 +8,42 @@ import os
 # 项目根目录
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
-# 数据路径
-DATA_ROOT = os.path.join(PROJECT_ROOT, "data", "ISIC")
+# 数据路径 - 使用您的ISIC数据集路径
+DATA_ROOT = "/nfs/scratch/eechengyang/Data/ISIC"
 
 # 模型路径
 MODEL_DIR = os.path.join(PROJECT_ROOT, "models")
 
-# PanDerm模型路径（需要您下载真实模型文件）
+# PanDerm模型路径 - 使用您提供的预训练模型路径
+# 注意：如果只有一个模型文件，建议只使用一个配置
 PANDERM_MODEL_PATHS = {
-    "panderm-base": os.path.join(MODEL_DIR, "panderm", "panderm_base.pth"),
-    "panderm-large": os.path.join(MODEL_DIR, "panderm", "panderm_large.pth"),
+    "panderm-large": "/nfs/scratch/eechengyang/Code/REPA-E/pretrained/panderm.pth",
+    # "panderm-base": "/nfs/scratch/eechengyang/Code/REPA-E/pretrained/panderm_base.pth",  # 如果有base模型，取消注释并修改路径
 }
 
-# 如果没有真实的PanDerm模型，将使用ViT替代
-USE_VIT_SUBSTITUTE = True
+# 使用真实的PanDerm模型
+USE_VIT_SUBSTITUTE = False
 
-# 输出目录
+# 实验输出根目录（独立于代码目录）
+EXPERIMENT_ROOT = "/nfs/scratch/eechengyang/Code/logs"
+
+# 默认输出目录（仅用于配置，实际使用时会被实验管理器覆盖）
+# 注意：这些路径不会被实际创建，仅作为配置模板
 OUTPUT_DIRS = {
-    "checkpoints": os.path.join(PROJECT_ROOT, "checkpoints"),
-    "outputs": os.path.join(PROJECT_ROOT, "outputs"), 
-    "logs": os.path.join(PROJECT_ROOT, "logs"),
-    "generated": os.path.join(PROJECT_ROOT, "generated_images")
+    "checkpoints": os.path.join(EXPERIMENT_ROOT, "temp", "checkpoints"),
+    "outputs": os.path.join(EXPERIMENT_ROOT, "temp", "outputs"), 
+    "logs": os.path.join(EXPERIMENT_ROOT, "temp", "logs"),
+    "generated": os.path.join(EXPERIMENT_ROOT, "temp", "generated_images"),
+    "cache": os.path.join(EXPERIMENT_ROOT, "temp", "cache"),
+    "wandb": os.path.join(EXPERIMENT_ROOT, "temp", "wandb")
 }
 
-# 创建必要目录
-for dir_path in OUTPUT_DIRS.values():
-    os.makedirs(dir_path, exist_ok=True)
+# 不创建默认目录，由实验管理器负责创建具体实验目录
 
 print("✓ 模型路径配置完成")
 print(f"数据路径: {DATA_ROOT}")
-print(f"输出目录: {list(OUTPUT_DIRS.values())}")
+print(f"实验根目录: {EXPERIMENT_ROOT}")
+print("注意：实际输出目录将由实验管理器创建，格式为 [实验名称_时间戳]")
 
 # 验证数据路径
 if os.path.exists(DATA_ROOT):

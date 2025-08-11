@@ -5,11 +5,14 @@ from .evaluation import (
     MedicalImageEvaluator, 
     ComprehensiveEvaluator
 )
+from .experiment_manager import ExperimentManager, create_experiment_manager
 
 __all__ = [
     'FIDCalculator',
     'ISCalculator', 
-    'LPIPSCalculator',
+    'LPIPSCalculator',  # 可用时执行；未安装lpips时内部降级
     'MedicalImageEvaluator',
-    'ComprehensiveEvaluator'
+    'ComprehensiveEvaluator',
+    'ExperimentManager',
+    'create_experiment_manager'
 ]

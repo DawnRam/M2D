@@ -77,17 +77,22 @@ def create_mock_isic_data():
     
     print("创建模拟ISIC数据...")
     
-    images_dir = os.path.join(DATA_ROOT, "images")
-    os.makedirs(images_dir, exist_ok=True)
+    # 不创建统一的images目录，而是为每个类别创建子目录
+    os.makedirs(DATA_ROOT, exist_ok=True)
     
     try:
         from PIL import Image, ImageDraw
         import numpy as np
         
-        # 创建模拟皮肤镜图像
+        # 创建模拟皮肤镜图像 - 7个ISIC标准类别
         categories = [
-            "melanoma", "nevus", "basal_cell", "keratosis", 
-            "benign", "dermatofibroma", "vascular", "squamous", "other"
+            "AKIEC",  # 光化性角化病
+            "BCC",    # 基底细胞癌
+            "BKL",    # 良性角化病
+            "DF",     # 皮肤纤维瘤
+            "MEL",    # 黑色素瘤
+            "NV",     # 色素痣
+            "VASC"    # 血管病变
         ]
         
         images_per_category = 50  # 每个类别50张图像
@@ -97,6 +102,10 @@ def create_mock_isic_data():
         
         for cat_idx, category in enumerate(categories):
             print(f"创建 {category} 类别图像...")
+            
+            # 为每个类别创建子目录
+            category_dir = os.path.join(DATA_ROOT, category)
+            os.makedirs(category_dir, exist_ok=True)
             
             for img_idx in range(images_per_category):
                 # 创建基础图像
@@ -122,13 +131,21 @@ def create_mock_isic_data():
                     y = np.random.randint(0, image_size[1])
                     radius = np.random.randint(5, 30)
                     
-                    # 不同类别的不同颜色
-                    if category == "melanoma":
+                    # 不同类别的不同颜色 - 使用ISIC标准类别
+                    if category == "MEL":  # 黑色素瘤
                         color = (139, 69, 19)  # 深棕色
-                    elif category == "nevus":
+                    elif category == "NV":  # 色素痣
                         color = (160, 82, 45)  # 鞍褐色
-                    elif category == "basal_cell":
+                    elif category == "BCC":  # 基底细胞癌
                         color = (255, 182, 193)  # 浅粉色
+                    elif category == "AKIEC":  # 光化性角化病
+                        color = (255, 215, 0)  # 金色
+                    elif category == "BKL":  # 良性角化病
+                        color = (210, 180, 140)  # 棕褐色
+                    elif category == "DF":  # 皮肤纤维瘤
+                        color = (255, 160, 122)  # 浅鲑鱼色
+                    elif category == "VASC":  # 血管病变
+                        color = (220, 20, 60)  # 深红色
                     else:
                         color = (np.random.randint(100, 200), 
                                 np.random.randint(50, 150), 
@@ -136,9 +153,9 @@ def create_mock_isic_data():
                     
                     draw.ellipse([x-radius, y-radius, x+radius, y+radius], fill=color)
                 
-                # 保存图像
+                # 保存图像到对应的类别目录
                 filename = f"ISIC_{cat_idx:02d}{img_idx:03d}.jpg"
-                filepath = os.path.join(images_dir, filename)
+                filepath = os.path.join(category_dir, filename)
                 img.save(filepath, quality=85)
                 
                 # 记录元数据
@@ -149,13 +166,13 @@ def create_mock_isic_data():
                     'category': category
                 })
         
-        # 保存元数据
-        metadata_df = pd.DataFrame(metadata_list)
-        metadata_path = os.path.join(DATA_ROOT, "metadata.csv")
-        metadata_df.to_csv(metadata_path, index=False)
+        # 不再创建metadata.csv文件，使用真实数据集的目录结构
+        # metadata_df = pd.DataFrame(metadata_list)
+        # metadata_path = os.path.join(DATA_ROOT, "metadata.csv")
+        # metadata_df.to_csv(metadata_path, index=False)
         
         print(f"✓ 创建了 {len(metadata_list)} 张模拟图像")
-        print(f"✓ 元数据已保存到: {metadata_path}")
+        # print(f"✓ 元数据已保存到: {metadata_path}")
         
     except ImportError as e:
         print(f"创建模拟数据需要PIL: {e}")
@@ -182,34 +199,42 @@ def verify_setup():
     print("\n" + "="*50)
     print("验证设置...")
     
-    # 检查数据目录
-    images_dir = os.path.join(DATA_ROOT, "images")
-    if os.path.exists(images_dir):
-        image_files = [f for f in os.listdir(images_dir) 
-                      if f.lower().endswith(('.jpg', '.jpeg', '.png'))]
-        print(f"✓ 图像目录: {len(image_files)} 张图像")
-        
-        if len(image_files) > 100:
-            print("✓ 图像数量充足")
-        else:
-            print("⚠ 图像数量较少，建议增加更多数据")
-    else:
-        print(f"✗ 图像目录不存在: {images_dir}")
-        return False
+    # 检查数据目录结构 - 7个类别子目录
+    expected_categories = ['AKIEC', 'BCC', 'BKL', 'DF', 'MEL', 'NV', 'VASC']
+    total_images = 0
     
-    # 检查元数据
-    metadata_path = os.path.join(DATA_ROOT, "metadata.csv")
-    if os.path.exists(metadata_path):
-        try:
-            metadata = pd.read_csv(metadata_path)
-            print(f"✓ 元数据文件: {len(metadata)} 条记录")
-            
-            if 'target' in metadata.columns:
-                print(f"✓ 类别分布: {metadata['target'].value_counts().to_dict()}")
-        except Exception as e:
-            print(f"⚠ 元数据读取错误: {e}")
+    for category in expected_categories:
+        category_dir = os.path.join(DATA_ROOT, category)
+        if os.path.exists(category_dir):
+            image_files = [f for f in os.listdir(category_dir) 
+                          if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))]
+            total_images += len(image_files)
+            print(f"✓ {category} 目录: {len(image_files)} 张图像")
+        else:
+            print(f"✗ {category} 目录不存在")
+    
+    print(f"✓ 总图像数量: {total_images}")
+    if total_images > 0:
+        print("✓ 发现ISIC数据集图像")
+        # 显示类别分布
+        category_counts = {}
+        for category in expected_categories:
+            category_dir = os.path.join(DATA_ROOT, category)
+            if os.path.exists(category_dir):
+                count = len([f for f in os.listdir(category_dir) 
+                            if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))])
+                category_counts[category] = count
+        print(f"✓ 实际类别分布: {category_counts}")
     else:
-        print("⚠ 未找到元数据文件")
+        print("⚠ 未发现图像数据")
+        
+    # 检查旧的images目录（如果存在，提醒用户）
+    old_images_dir = os.path.join(DATA_ROOT, "images")
+    if os.path.exists(old_images_dir):
+        print(f"⚠ 发现旧的images目录，建议删除: {old_images_dir}")
+    
+    # 不再检查metadata.csv文件，直接从目录结构获取类别分布
+    print("✓ 使用真实ISIC数据集，无需元数据文件")
     
     # 检查输出目录
     from configs.model_paths import OUTPUT_DIRS
@@ -234,13 +259,13 @@ def main():
     args = parser.parse_args()
     
     if args.all:
-        args.create_mock = True
+        # args.create_mock = True  # 不再创建模拟数据
         args.download_models = True
         args.verify = True
     
     if not any([args.download_sample, args.create_mock, args.download_models, args.verify]):
         args.all = True
-        args.create_mock = True
+        # args.create_mock = True  # 不再创建模拟数据
         args.download_models = True
         args.verify = True
     
@@ -251,8 +276,9 @@ def main():
         if args.download_sample:
             download_sample_isic_data()
         
-        if args.create_mock:
-            create_mock_isic_data()
+        # 不再创建模拟数据，使用真实的ISIC数据集
+        # if args.create_mock:
+        #     create_mock_isic_data()
         
         if args.download_models:
             download_pretrained_weights()

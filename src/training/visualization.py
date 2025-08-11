@@ -493,17 +493,26 @@ def create_category_batches(
     return category_batches
 
 
-# ISIC数据集的皮肤病类别名称
+# ISIC数据集的皮肤病类别名称（对应实际的7个类别）
 ISIC_CATEGORY_NAMES = [
-    "Melanoma",           # 黑色素瘤
-    "Melanocytic_nevus",  # 色素痣
-    "Basal_cell_carcinoma", # 基底细胞癌
-    "Actinic_keratosis",  # 光化性角化病
-    "Benign_keratosis",   # 良性角化病
-    "Dermatofibroma",     # 皮肤纤维瘤
-    "Vascular_lesion",    # 血管病变
-    "Squamous_cell_carcinoma", # 鳞状细胞癌
-    "Other"               # 其他
+    "AKIEC",  # 光化性角化病 (Actinic keratoses)
+    "BCC",    # 基底细胞癌 (Basal cell carcinoma)
+    "BKL",    # 良性角化病 (Benign keratosis-like lesions)
+    "DF",     # 皮肤纤维瘤 (Dermatofibroma)
+    "MEL",    # 黑色素瘤 (Melanoma)
+    "NV",     # 色素痣 (Melanocytic nevi)
+    "VASC"    # 血管病变 (Vascular lesions)
+]
+
+# 中文类别名称
+ISIC_CATEGORY_NAMES_CN = [
+    "光化性角化病",
+    "基底细胞癌",
+    "良性角化病",
+    "皮肤纤维瘤",
+    "黑色素瘤",
+    "色素痣",
+    "血管病变"
 ]
 
 

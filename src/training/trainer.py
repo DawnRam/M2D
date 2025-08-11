@@ -26,6 +26,9 @@ class PanDermDiffusionTrainer:
     def __init__(self, config: Config):
         self.config = config
         
+        # 设置GPU环境
+        self._setup_gpu_environment()
+        
         # 初始化accelerator
         self.accelerator = Accelerator(
             mixed_precision='fp16' if config.mixed_precision else 'no',
@@ -65,6 +68,35 @@ class PanDermDiffusionTrainer:
         # 可视化工具
         self.visualizer = None
         self.category_batches = None
+    
+    def _setup_gpu_environment(self):
+        """设置GPU环境"""
+        import os
+        
+        # 设置可见的GPU设备
+        if self.config.gpu_ids and self.config.gpu_ids != "auto":
+            os.environ["CUDA_VISIBLE_DEVICES"] = self.config.gpu_ids
+            print(f"✓ 设置可见GPU设备: {self.config.gpu_ids}")
+        
+        # 检测可用GPU数量
+        if torch.cuda.is_available():
+            num_gpus = torch.cuda.device_count()
+            print(f"✓ 检测到 {num_gpus} 个GPU设备")
+            
+            # 自动设置进程数
+            if self.config.num_processes == -1:
+                self.config.num_processes = num_gpus
+                print(f"✓ 自动设置进程数为: {num_gpus}")
+            
+            # 打印GPU信息
+            for i in range(num_gpus):
+                gpu_name = torch.cuda.get_device_name(i)
+                gpu_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
+                print(f"  GPU {i}: {gpu_name} ({gpu_memory:.1f}GB)")
+        else:
+            print("⚠ 未检测到CUDA设备，将使用CPU训练")
+            self.config.distributed = False
+            self.config.num_processes = 1
         
     def _setup_logging(self):
         """设置日志"""
@@ -132,11 +164,26 @@ class PanDermDiffusionTrainer:
         """初始化数据加载器"""
         self.logger.info("初始化数据加载器...")
         
-        self.train_loader, self.val_loader, self.test_loader = create_dataloaders(
+        # 使用多类别数据集加载器
+        from ..data import create_isic_dataloaders
+        
+        # 获取缓存目录（从配置或实验目录）
+        cache_dir = None
+        if hasattr(self.config, 'cache_dir') and self.config.cache_dir:
+            cache_dir = self.config.cache_dir
+        elif hasattr(self.config, 'log_dir') and self.config.log_dir:
+            # 使用日志目录的父目录作为缓存目录
+            import os
+            cache_dir = os.path.join(os.path.dirname(self.config.log_dir), "cache")
+        
+        self.train_loader, self.val_loader, self.test_loader = create_isic_dataloaders(
             data_root=self.config.data.data_root,
             batch_size=self.config.data.batch_size,
             num_workers=self.config.data.num_workers,
-            image_size=self.config.data.image_size
+            image_size=self.config.data.image_size,
+            augmentation=self.config.data.augmentation,
+            balance_classes=True,  # 启用类别平衡
+            cache_dir=cache_dir
         )
         
         self.logger.info(f"训练集大小: {len(self.train_loader.dataset)}")
@@ -558,8 +605,8 @@ class PanDermDiffusionTrainer:
             
             # 更新进度条
             progress_bar.set_postfix({
-                'loss': loss_dict['total_loss']:.4f,
-                'lr': self.optimizer.param_groups[0]['lr']:.6f
+                'loss': f"{loss_dict['total_loss']:.4f}",
+                'lr': f"{self.optimizer.param_groups[0]['lr']:.6f}"
             })
             
             # 记录日志

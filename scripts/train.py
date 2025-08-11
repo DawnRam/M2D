@@ -26,7 +26,7 @@ def parse_args():
     parser.add_argument(
         "--data_root", 
         type=str, 
-        default="./data/ISIC",
+        default="/nfs/scratch/eechengyang/Data/ISIC",
         help="ISIC数据集根目录"
     )
     parser.add_argument(
@@ -100,6 +100,32 @@ def parse_args():
         help="梯度累积步数"
     )
     
+    # GPU和分布式训练相关
+    parser.add_argument(
+        "--gpu_ids", 
+        type=str, 
+        default="0,1,2,3",
+        help="GPU设备ID，逗号分隔，如 '0,1,2,3' 或 '0'"
+    )
+    parser.add_argument(
+        "--device", 
+        type=str, 
+        default="auto",
+        help="设备类型：'auto', 'cuda', 'cpu', 'cuda:0', 等"
+    )
+    parser.add_argument(
+        "--distributed", 
+        action="store_true",
+        default=True,
+        help="启用分布式训练（多GPU）"
+    )
+    parser.add_argument(
+        "--num_processes", 
+        type=int, 
+        default=-1,
+        help="进程数，-1表示自动检测GPU数量"
+    )
+    
     # 损失函数权重
     parser.add_argument(
         "--alpha_diffusion", 
@@ -141,24 +167,24 @@ def parse_args():
         help="噪声调度"
     )
     
-    # 输出和日志
+    # 输出和日志（这些路径会被实验管理器覆盖）
     parser.add_argument(
         "--output_dir", 
         type=str, 
-        default="./outputs",
-        help="输出目录"
+        default=None,  # 由实验管理器设置
+        help="输出目录（自动设置）"
     )
     parser.add_argument(
         "--checkpoint_dir", 
         type=str, 
-        default="./checkpoints",
-        help="检查点目录"
+        default=None,  # 由实验管理器设置
+        help="检查点目录（自动设置）"
     )
     parser.add_argument(
         "--log_dir", 
         type=str, 
-        default="./logs",
-        help="日志目录"
+        default=None,  # 由实验管理器设置
+        help="日志目录（自动设置）"
     )
     parser.add_argument(
         "--experiment_name", 
@@ -246,13 +272,20 @@ def update_config_from_args(config: Config, args) -> Config:
     config.training.log_every = args.log_every
     
     # 设备和加速
+    config.device = args.device
+    config.gpu_ids = args.gpu_ids
+    config.distributed = args.distributed
+    config.num_processes = args.num_processes
     config.mixed_precision = args.mixed_precision
     config.gradient_accumulation_steps = args.gradient_accumulation_steps
     
-    # 输出目录
-    config.output_dir = args.output_dir
-    config.checkpoint_dir = args.checkpoint_dir
-    config.log_dir = args.log_dir
+    # 输出目录（如果参数中指定了路径，则使用；否则保持默认，由实验管理器覆盖）
+    if args.output_dir is not None:
+        config.output_dir = args.output_dir
+    if args.checkpoint_dir is not None:
+        config.checkpoint_dir = args.checkpoint_dir
+    if args.log_dir is not None:
+        config.log_dir = args.log_dir
     config.experiment_name = args.experiment_name
     
     # 随机种子
@@ -265,29 +298,46 @@ def main():
     """主函数"""
     args = parse_args()
     
-    # 创建输出目录
-    os.makedirs(args.output_dir, exist_ok=True)
-    os.makedirs(args.checkpoint_dir, exist_ok=True)
-    os.makedirs(args.log_dir, exist_ok=True)
-    
-    # 初始化Wandb（如果启用）
-    if args.use_wandb:
-        wandb.init(
-            project=args.wandb_project,
-            name=args.experiment_name,
-            config=vars(args)
-        )
+    # 创建实验管理器
+    from src.utils import create_experiment_manager
+    exp_manager = create_experiment_manager(
+        experiment_name=args.experiment_name
+    )
     
     # 加载和更新配置
     config = Config()
     config = update_config_from_args(config, args)
     
+    # 更新配置中的目录路径为实验目录
+    config.output_dir = str(exp_manager.get_output_dir())
+    config.checkpoint_dir = str(exp_manager.get_checkpoint_dir())
+    config.log_dir = str(exp_manager.get_log_dir())
+    
+    # 保存配置到实验目录
+    exp_manager.save_config(config.__dict__)
+    
+    # 初始化Wandb（如果启用）
+    if args.use_wandb:
+        # 设置WandB目录到实验目录
+        wandb_dir = exp_manager.get_dir("wandb")
+        os.environ["WANDB_DIR"] = str(wandb_dir)
+        
+        wandb.init(
+            project=args.wandb_project,
+            name=args.experiment_name,
+            config=vars(args),
+            dir=str(wandb_dir)
+        )
+    
     print("=" * 50)
     print("PanDerm-Guided Diffusion训练")
     print("=" * 50)
     print(f"实验名称: {config.experiment_name}")
+    print(f"实验目录: {exp_manager.experiment_dir}")
     print(f"数据目录: {config.data.data_root}")
     print(f"输出目录: {config.output_dir}")
+    print(f"检查点目录: {config.checkpoint_dir}")
+    print(f"日志目录: {config.log_dir}")
     print(f"PanDerm模型: {config.model.panderm_model}")
     print(f"融合方式: {config.model.fusion_type}")
     print(f"训练轮数: {config.training.epochs}")

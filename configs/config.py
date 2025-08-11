@@ -89,9 +89,14 @@ class Config:
     training: TrainingConfig = TrainingConfig()
     
     # 设备和加速
-    device: str = "cuda"
+    device: str = "auto"  # "auto", "cuda", "cpu", "cuda:0", "cuda:1", etc.
+    gpu_ids: str = "0,1,2,3"  # GPU设备ID，逗号分隔，如 "0,1,2,3" 或 "0"
     mixed_precision: bool = True
     gradient_accumulation_steps: int = 1
+    
+    # 分布式训练
+    distributed: bool = True  # 是否启用分布式训练
+    num_processes: int = -1   # 进程数，-1表示自动检测GPU数量
     
     # 实验管理
     experiment_name: str = "panderm_diffusion"

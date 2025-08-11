@@ -11,7 +11,12 @@ import cv2
 from scipy import linalg
 from torchvision import transforms
 from torchvision.models import inception_v3
-import lpips
+try:
+    import lpips  # type: ignore
+    _HAS_LPIPS = True
+except Exception:
+    lpips = None  # type: ignore
+    _HAS_LPIPS = False
 
 
 class FIDCalculator:
@@ -175,7 +180,11 @@ class LPIPSCalculator:
     
     def __init__(self, device: torch.device, network: str = 'alex'):
         self.device = device
-        self.lpips_model = lpips.LPIPS(net=network).to(device)
+        if _HAS_LPIPS:
+            self.lpips_model = lpips.LPIPS(net=network).to(device)  # type: ignore[attr-defined]
+        else:
+            self.lpips_model = None
+            print("⚠ 未安装lpips包，LPIPS将被跳过，返回-1.0")
     
     def calculate_lpips(
         self, 
@@ -192,12 +201,13 @@ class LPIPSCalculator:
         if images2.max() <= 1.0 and images2.min() >= 0.0:
             images2 = images2 * 2.0 - 1.0
         
+        if self.lpips_model is None:
+            return -1.0
         with torch.no_grad():
             lpips_dist = self.lpips_model(
                 images1.to(self.device), 
                 images2.to(self.device)
             )
-        
         return float(lpips_dist.mean().cpu())
 
 
