@@ -12,9 +12,9 @@ except ImportError:
     _use_custom_paths = False
     DATA_ROOT = "./data/ISIC"
     OUTPUT_DIRS = {
-        "checkpoints": "./checkpoints",
-        "outputs": "./outputs",
-        "logs": "./logs"
+        "checkpoints": "/nfs/scratch/eechengyang/Code/logs/placeholder/checkpoints",
+        "outputs": "/nfs/scratch/eechengyang/Code/logs/placeholder/outputs",
+        "logs": "/nfs/scratch/eechengyang/Code/logs/placeholder/logs"
     }
     USE_VIT_SUBSTITUTE = True
 
@@ -23,7 +23,7 @@ except ImportError:
 class DataConfig:
     """数据相关配置"""
     data_root: str = DATA_ROOT
-    image_size: int = 224
+    image_size: int = 256
     batch_size: int = 16
     num_workers: int = 4
     train_split: float = 0.8

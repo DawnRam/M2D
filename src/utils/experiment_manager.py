@@ -296,11 +296,11 @@ def create_experiment_manager(
     # 备份代码
     exp_manager.backup_code(project_root)
     
-    # 创建符号链接（可选）
-    try:
-        exp_manager.create_symlinks(project_root)
-    except Exception as e:
-        print(f"⚠ 创建符号链接失败: {e}")
+    # 不创建符号链接，避免在代码目录创建本地文件夹
+    # try:
+    #     exp_manager.create_symlinks(project_root)
+    # except Exception as e:
+    #     print(f"⚠ 创建符号链接失败: {e}")
     
     return exp_manager
 

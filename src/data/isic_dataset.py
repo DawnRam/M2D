@@ -16,7 +16,7 @@ class ISICDataset(Dataset):
         self,
         data_root: str,
         split: str = "train",
-        image_size: int = 224,
+        image_size: int = 256,
         augmentation: bool = True,
         metadata_file: Optional[str] = None
     ):
@@ -153,7 +153,7 @@ def create_dataloaders(
     data_root: str,
     batch_size: int = 16,
     num_workers: int = 4,
-    image_size: int = 224,
+    image_size: int = 256,
     metadata_file: Optional[str] = None
 ) -> Tuple[DataLoader, DataLoader, DataLoader]:
     """创建训练、验证和测试数据加载器"""

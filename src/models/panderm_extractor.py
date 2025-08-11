@@ -6,6 +6,9 @@ import timm
 from transformers import AutoModel, AutoConfig
 import os
 import sys
+import math
+import warnings
+from scipy import interpolate
 
 # 添加配置路径
 sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -14,6 +17,9 @@ try:
 except ImportError:
     PANDERM_MODEL_PATHS = {}
     USE_VIT_SUBSTITUTE = True
+
+# 导入PanDerm模型实现
+from .panderm_model import panderm_base_patch16_224_finetune, load_state_dict
 
 
 class PanDermFeatureExtractor(nn.Module):
@@ -46,52 +52,66 @@ class PanDermFeatureExtractor(nn.Module):
         if not USE_VIT_SUBSTITUTE and panderm_path and os.path.exists(panderm_path):
             print(f"✓ 加载PanDerm预训练模型: {panderm_path}")
             
-            # 首先创建ViT backbone结构
-            if "large" in model_name.lower():
-                self.backbone = timm.create_model(
-                    'vit_large_patch16_224', 
-                    pretrained=False,  # 不加载ImageNet权重
-                    num_classes=0,
-                    global_pool=''
-                )
-                backbone_dim = 1024
-            else:
-                self.backbone = timm.create_model(
-                    'vit_base_patch16_224',
-                    pretrained=False,  # 不加载ImageNet权重
-                    num_classes=0,
-                    global_pool=''
-                )
-                backbone_dim = 768
-            
-            # 加载PanDerm预训练权重
+            # 使用REPA-E的PanDerm模型架构
             try:
-                checkpoint = torch.load(panderm_path, map_location='cpu')
+                model_args = {
+                    'pretrained': False,
+                    'num_classes': 2,
+                    'drop_rate': 0.0,
+                    'drop_path_rate': 0.1,
+                    'attn_drop_rate': 0.0,
+                    'drop_block_rate': None,
+                    'use_mean_pooling': True,
+                    'init_scale': 0.001,
+                    'use_rel_pos_bias': True,
+                    'init_values': 0.1,
+                    'lin_probe': False,
+                    'patch_size': 16,
+                    'img_size': 256  # 明确设置256像素输入
+                }
                 
-                # 处理不同格式的checkpoint
-                if isinstance(checkpoint, dict):
-                    if 'state_dict' in checkpoint:
-                        state_dict = checkpoint['state_dict']
-                    elif 'model' in checkpoint:
-                        state_dict = checkpoint['model']
-                    else:
-                        state_dict = checkpoint
-                else:
-                    state_dict = checkpoint
+                self.backbone = panderm_base_patch16_224_finetune(**model_args)
+                backbone_dim = 768  # PanDerm base的嵌入维度
                 
-                # 加载权重，允许部分匹配
-                missing_keys, unexpected_keys = self.backbone.load_state_dict(state_dict, strict=False)
+                # 加载预训练权重
+                checkpoint_model = torch.load(panderm_path, map_location='cpu')
                 
-                if missing_keys:
-                    print(f"⚠ PanDerm模型缺失的键: {len(missing_keys)} 个")
-                if unexpected_keys:
-                    print(f"⚠ PanDerm模型未预期的键: {len(unexpected_keys)} 个")
-                    
+                # 处理权重
+                state_dict = self.backbone.state_dict()
+                
+                # 处理分类头权重（如果尺寸不匹配则删除）
+                for k in ['head.weight', 'head.bias']:
+                    if k in checkpoint_model and checkpoint_model[k].shape != state_dict[k].shape:
+                        del checkpoint_model[k]
+                
+                # 处理相对位置编码
+                if self.backbone.use_rel_pos_bias and "rel_pos_bias.relative_position_bias_table" in checkpoint_model:
+                    num_layers = self.backbone.get_num_layers()
+                    rel_pos_bias = checkpoint_model["rel_pos_bias.relative_position_bias_table"]
+                    for i in range(num_layers):
+                        checkpoint_model[f"blocks.{i}.attn.relative_position_bias_table"] = rel_pos_bias.clone()
+                    checkpoint_model.pop("rel_pos_bias.relative_position_bias_table")
+                
+                # 处理位置编码
+                self._process_position_embedding(self.backbone, checkpoint_model, model_args)
+                
+                # 加载处理后的权重
+                load_state_dict(self.backbone, checkpoint_model)
+                
                 print(f"✓ 成功加载PanDerm预训练权重")
                 
             except Exception as e:
                 print(f"⚠ 加载PanDerm权重失败: {e}")
-                print("  使用随机初始化的ViT backbone")
+                print("  回退到ViT替代模型")
+                # 回退到ViT
+                self.backbone = timm.create_model(
+                    'vit_base_patch16_224',
+                    pretrained=True,
+                    num_classes=0,
+                    global_pool='',
+                    img_size=256
+                )
+                backbone_dim = 768
         else:
             # 使用ViT作为替代
             if not USE_VIT_SUBSTITUTE:
@@ -103,7 +123,8 @@ class PanDermFeatureExtractor(nn.Module):
                     'vit_large_patch16_224', 
                     pretrained=True,  # 使用ImageNet预训练权重
                     num_classes=0,
-                    global_pool=''
+                    global_pool='',
+                    img_size=256  # 设置输入图像尺寸为256
                 )
                 backbone_dim = 1024
             else:
@@ -111,7 +132,8 @@ class PanDermFeatureExtractor(nn.Module):
                     'vit_base_patch16_224',
                     pretrained=True,  # 使用ImageNet预训练权重
                     num_classes=0,
-                    global_pool=''
+                    global_pool='',
+                    img_size=256  # 设置输入图像尺寸为256
                 )
                 backbone_dim = 768
         
@@ -193,6 +215,76 @@ class PanDermFeatureExtractor(nn.Module):
                 'global': global_feature,  # [B, feature_dim]
                 'spatial': x_embed,        # [B, N, D] 空间特征用于cross-attention
             }
+    
+    def _process_position_embedding(self, encoder, checkpoint_model, model_args):
+        """处理位置编码的辅助函数"""
+        all_keys = list(checkpoint_model.keys())
+        for key in all_keys:
+            if "relative_position_index" in key:
+                checkpoint_model.pop(key)
+            
+            if "relative_position_bias_table" in key and model_args['use_rel_pos_bias']:
+                rel_pos_bias = checkpoint_model[key]
+                src_num_pos, num_attn_heads = rel_pos_bias.size()
+                dst_num_pos, _ = encoder.state_dict()[key].size()
+                dst_patch_shape = encoder.patch_embed.patch_shape
+                
+                if dst_patch_shape[0] != dst_patch_shape[1]:
+                    raise NotImplementedError()
+                
+                num_extra_tokens = dst_num_pos - (dst_patch_shape[0] * 2 - 1) * (dst_patch_shape[1] * 2 - 1)
+                src_size = int((src_num_pos - num_extra_tokens) ** 0.5)
+                dst_size = int((dst_num_pos - num_extra_tokens) ** 0.5)
+                
+                if src_size != dst_size:
+                    checkpoint_model[key] = self._interpolate_rel_pos_bias(rel_pos_bias, src_size, dst_size, num_extra_tokens)
+
+    def _interpolate_rel_pos_bias(self, rel_pos_bias, src_size, dst_size, num_extra_tokens):
+        """插值相对位置偏置的辅助函数"""
+        import numpy as np
+        
+        extra_tokens = rel_pos_bias[-num_extra_tokens:, :]
+        rel_pos_bias = rel_pos_bias[:-num_extra_tokens, :]
+        
+        # 几何级数计算
+        def geometric_progression(a, r, n):
+            return a * (1.0 - r ** n) / (1.0 - r)
+        
+        left, right = 1.01, 1.5
+        while right - left > 1e-6:
+            q = (left + right) / 2.0
+            gp = geometric_progression(1, q, src_size // 2)
+            if gp > dst_size // 2:
+                right = q
+            else:
+                left = q
+        
+        # 生成位置索引
+        dis = []
+        cur = 1
+        for i in range(src_size // 2):
+            dis.append(cur)
+            cur += q ** (i + 1)
+        
+        r_ids = [-_ for _ in reversed(dis)]
+        x = r_ids + [0] + dis
+        y = r_ids + [0] + dis
+        
+        t = dst_size // 2.0
+        dx = np.arange(-t, t + 0.1, 1.0)
+        dy = np.arange(-t, t + 0.1, 1.0)
+        
+        # 双三次插值
+        all_rel_pos_bias = []
+        for i in range(rel_pos_bias.size(1)):
+            z = rel_pos_bias[:, i].view(src_size, src_size).float().numpy()
+            f = interpolate.interp2d(x, y, z, kind='cubic')
+            all_rel_pos_bias.append(
+                torch.Tensor(f(dx, dy)).contiguous().view(-1, 1).to(rel_pos_bias.device))
+        
+        rel_pos_bias = torch.cat(all_rel_pos_bias, dim=-1)
+        new_rel_pos_bias = torch.cat((rel_pos_bias, extra_tokens), dim=0)
+        return new_rel_pos_bias
 
 
 class FeatureFusionModule(nn.Module):

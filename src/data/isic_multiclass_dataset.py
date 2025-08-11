@@ -44,7 +44,7 @@ class ISICMultiClassDataset(Dataset):
         self,
         data_root: str,
         split: str = "train",
-        image_size: int = 224,
+        image_size: int = 256,
         augmentation: bool = True,
         balance_classes: bool = False,
         cache_path: Optional[str] = None
@@ -291,7 +291,7 @@ def create_isic_dataloaders(
     data_root: str,
     batch_size: int = 16,
     num_workers: int = 4,
-    image_size: int = 224,
+    image_size: int = 256,
     augmentation: bool = True,
     balance_classes: bool = False,
     cache_dir: Optional[str] = None

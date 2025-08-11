@@ -27,15 +27,15 @@ USE_VIT_SUBSTITUTE = False
 # 实验输出根目录（独立于代码目录）
 EXPERIMENT_ROOT = "/nfs/scratch/eechengyang/Code/logs"
 
-# 默认输出目录（仅用于配置，实际使用时会被实验管理器覆盖）
+# 默认输出目录（占位符，实际使用时会被实验管理器覆盖为具体实验目录）
 # 注意：这些路径不会被实际创建，仅作为配置模板
 OUTPUT_DIRS = {
-    "checkpoints": os.path.join(EXPERIMENT_ROOT, "temp", "checkpoints"),
-    "outputs": os.path.join(EXPERIMENT_ROOT, "temp", "outputs"), 
-    "logs": os.path.join(EXPERIMENT_ROOT, "temp", "logs"),
-    "generated": os.path.join(EXPERIMENT_ROOT, "temp", "generated_images"),
-    "cache": os.path.join(EXPERIMENT_ROOT, "temp", "cache"),
-    "wandb": os.path.join(EXPERIMENT_ROOT, "temp", "wandb")
+    "checkpoints": os.path.join(EXPERIMENT_ROOT, "placeholder", "checkpoints"),
+    "outputs": os.path.join(EXPERIMENT_ROOT, "placeholder", "outputs"), 
+    "logs": os.path.join(EXPERIMENT_ROOT, "placeholder", "logs"),
+    "generated": os.path.join(EXPERIMENT_ROOT, "placeholder", "generated_images"),
+    "cache": os.path.join(EXPERIMENT_ROOT, "placeholder", "cache"),
+    "wandb": os.path.join(EXPERIMENT_ROOT, "placeholder", "wandb")
 }
 
 # 不创建默认目录，由实验管理器负责创建具体实验目录

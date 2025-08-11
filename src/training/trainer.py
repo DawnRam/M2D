@@ -30,11 +30,22 @@ class PanDermDiffusionTrainer:
         self._setup_gpu_environment()
         
         # 初始化accelerator
-        self.accelerator = Accelerator(
-            mixed_precision='fp16' if config.mixed_precision else 'no',
-            gradient_accumulation_steps=config.gradient_accumulation_steps,
-            log_with="wandb" if wandb.run else None,
-        )
+        accelerator_kwargs = {
+            'mixed_precision': 'fp16' if config.mixed_precision else 'no',
+            'gradient_accumulation_steps': config.gradient_accumulation_steps,
+            'log_with': "wandb" if wandb.run else None,
+        }
+        
+        # 分布式训练的特殊设置
+        if config.distributed:
+            print("✓ 配置分布式训练accelerator")
+            # 让accelerate自动处理设备分配，不手动指定
+            accelerator_kwargs.update({
+                'device_placement': True,  # 自动设备放置
+                'split_batches': False,    # 不分割批次
+            })
+        
+        self.accelerator = Accelerator(**accelerator_kwargs)
         
         # 设置随机种子
         set_seed(config.seed)
@@ -73,15 +84,23 @@ class PanDermDiffusionTrainer:
         """设置GPU环境"""
         import os
         
-        # 设置可见的GPU设备
-        if self.config.gpu_ids and self.config.gpu_ids != "auto":
-            os.environ["CUDA_VISIBLE_DEVICES"] = self.config.gpu_ids
-            print(f"✓ 设置可见GPU设备: {self.config.gpu_ids}")
-        
         # 检测可用GPU数量
         if torch.cuda.is_available():
             num_gpus = torch.cuda.device_count()
             print(f"✓ 检测到 {num_gpus} 个GPU设备")
+            
+            # 对于分布式训练，不设置CUDA_VISIBLE_DEVICES，让accelerate管理
+            if self.config.distributed:
+                print("✓ 分布式训练模式：由accelerate管理GPU分配")
+                # 移除CUDA_VISIBLE_DEVICES设置，避免冲突
+                if "CUDA_VISIBLE_DEVICES" in os.environ:
+                    print(f"  移除CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
+                    del os.environ["CUDA_VISIBLE_DEVICES"]
+            else:
+                # 单GPU训练时才设置CUDA_VISIBLE_DEVICES
+                if self.config.gpu_ids and self.config.gpu_ids != "auto":
+                    os.environ["CUDA_VISIBLE_DEVICES"] = self.config.gpu_ids
+                    print(f"✓ 单GPU训练：设置可见GPU设备: {self.config.gpu_ids}")
             
             # 自动设置进程数
             if self.config.num_processes == -1:
@@ -89,10 +108,12 @@ class PanDermDiffusionTrainer:
                 print(f"✓ 自动设置进程数为: {num_gpus}")
             
             # 打印GPU信息
-            for i in range(num_gpus):
+            for i in range(min(num_gpus, 4)):  # 只显示前4个GPU信息，避免输出过长
                 gpu_name = torch.cuda.get_device_name(i)
                 gpu_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
                 print(f"  GPU {i}: {gpu_name} ({gpu_memory:.1f}GB)")
+            if num_gpus > 4:
+                print(f"  ... 和其他 {num_gpus-4} 个GPU")
         else:
             print("⚠ 未检测到CUDA设备，将使用CPU训练")
             self.config.distributed = False
@@ -112,10 +133,10 @@ class PanDermDiffusionTrainer:
         )
         self.logger = logging.getLogger(__name__)
         
-        # 创建输出目录
-        os.makedirs(self.config.output_dir, exist_ok=True)
-        os.makedirs(self.config.checkpoint_dir, exist_ok=True)
-        os.makedirs(self.config.log_dir, exist_ok=True)
+        # 输出目录由实验管理器创建，这里不再重复创建
+        # os.makedirs(self.config.output_dir, exist_ok=True)
+        # os.makedirs(self.config.checkpoint_dir, exist_ok=True) 
+        # os.makedirs(self.config.log_dir, exist_ok=True)
     
     def setup_models(self):
         """初始化模型"""
