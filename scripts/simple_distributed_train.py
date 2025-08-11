@@ -61,15 +61,16 @@ def main():
     print(" ".join(cmd))
     print()
     
-    # 清除可能冲突的环境变量
+    # 设置环境变量
     env = os.environ.copy()
-    if "CUDA_VISIBLE_DEVICES" in env:
-        print(f"移除CUDA_VISIBLE_DEVICES: {env['CUDA_VISIBLE_DEVICES']}")
-        del env["CUDA_VISIBLE_DEVICES"]
     
-    # 设置PyTorch分布式环境变量
-    env["NCCL_DEBUG"] = "INFO"
-    env["TORCH_DISTRIBUTED_DEBUG"] = "DETAIL"
+    # 设置PyTorch分布式环境变量（调试模式）
+    env["NCCL_DEBUG"] = "WARN"  # 减少日志噪音
+    env["TORCH_DISTRIBUTED_DEBUG"] = "OFF"  # 关闭详细调试
+    env["PYTHONPATH"] = str(Path(__file__).parent.parent)  # 添加项目根目录到Python路径
+    
+    # 让accelerate自动管理CUDA设备
+    print(f"CUDA_VISIBLE_DEVICES: {env.get('CUDA_VISIBLE_DEVICES', '未设置')}")
     
     try:
         # 执行训练

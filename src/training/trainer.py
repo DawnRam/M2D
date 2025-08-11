@@ -47,8 +47,9 @@ class PanDermDiffusionTrainer:
         
         self.accelerator = Accelerator(**accelerator_kwargs)
         
-        # 设置随机种子
-        set_seed(config.seed)
+        # 设置随机种子（加上进程索引确保每个进程使用不同种子）
+        seed_with_process = config.seed + (self.accelerator.process_index if hasattr(self.accelerator, 'process_index') else 0)
+        set_seed(seed_with_process)
         
         # 设置日志
         self._setup_logging()
@@ -89,13 +90,13 @@ class PanDermDiffusionTrainer:
             num_gpus = torch.cuda.device_count()
             print(f"✓ 检测到 {num_gpus} 个GPU设备")
             
-            # 对于分布式训练，不设置CUDA_VISIBLE_DEVICES，让accelerate管理
+            # 对于分布式训练，让accelerate管理GPU分配
             if self.config.distributed:
                 print("✓ 分布式训练模式：由accelerate管理GPU分配")
-                # 移除CUDA_VISIBLE_DEVICES设置，避免冲突
+                # 注意：不删除CUDA_VISIBLE_DEVICES，让accelerate自行处理
                 if "CUDA_VISIBLE_DEVICES" in os.environ:
-                    print(f"  移除CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
-                    del os.environ["CUDA_VISIBLE_DEVICES"]
+                    print(f"  检测到CUDA_VISIBLE_DEVICES: {os.environ['CUDA_VISIBLE_DEVICES']}")
+                    print("  将由accelerate管理设备分配")
             else:
                 # 单GPU训练时才设置CUDA_VISIBLE_DEVICES
                 if self.config.gpu_ids and self.config.gpu_ids != "auto":
@@ -275,6 +276,9 @@ class PanDermDiffusionTrainer:
         """设置Accelerator"""
         self.logger.info("设置Accelerator...")
         
+        # 等待所有进程就绪
+        self.accelerator.wait_for_everyone()
+        
         # 准备模型、优化器和数据加载器
         (
             self.panderm_extractor,
@@ -291,6 +295,9 @@ class PanDermDiffusionTrainer:
             self.train_loader,
             self.val_loader
         )
+        
+        # 再次等待所有进程同步
+        self.accelerator.wait_for_everyone()
         
         # 损失函数到设备
         self.criterion = self.criterion.to(self.accelerator.device)
@@ -367,6 +374,10 @@ class PanDermDiffusionTrainer:
         
         self.optimizer.step()
         self.optimizer.zero_grad()
+        
+        # 显式内存清理（防止多GPU内存泄漏）
+        if self.current_step % 50 == 0:  # 每50步清理一次
+            torch.cuda.empty_cache()
         
         # 转换为标量值用于日志
         scalar_losses = {}
@@ -495,17 +506,21 @@ class PanDermDiffusionTrainer:
                 self.panderm_extractor
             ).state_dict()
         
-        # 保存最新检查点
-        checkpoint_path = os.path.join(self.config.checkpoint_dir, f'checkpoint_epoch_{epoch}.pt')
-        torch.save(checkpoint, checkpoint_path)
+        # 只在主进程保存检查点
+        if self.accelerator.is_main_process:
+            checkpoint_path = os.path.join(self.config.checkpoint_dir, f'checkpoint_epoch_{epoch}.pt')
+            torch.save(checkpoint, checkpoint_path)
+            
+            # 保存最佳模型
+            if is_best:
+                best_path = os.path.join(self.config.checkpoint_dir, 'best_model.pt')
+                torch.save(checkpoint, best_path)
+                self.logger.info(f"保存最佳模型到 {best_path}")
+            
+            self.logger.info(f"保存检查点到 {checkpoint_path}")
         
-        # 保存最佳模型
-        if is_best:
-            best_path = os.path.join(self.config.checkpoint_dir, 'best_model.pt')
-            torch.save(checkpoint, best_path)
-            self.logger.info(f"保存最佳模型到 {best_path}")
-        
-        self.logger.info(f"保存检查点到 {checkpoint_path}")
+        # 等待主进程完成保存
+        self.accelerator.wait_for_everyone()
     
     def load_checkpoint(self, checkpoint_path: str):
         """加载检查点"""

@@ -90,13 +90,24 @@ def main():
     
     print(f"✓ 使用{num_processes}个GPU进行分布式训练")
     
+    # 先生成合适的accelerate配置
+    print("生成accelerate配置文件...")
+    try:
+        import subprocess
+        setup_result = subprocess.run([
+            sys.executable, "scripts/setup_accelerate_config.py", 
+            "--num_gpus", str(num_processes),
+            "--mixed_precision", "fp16" if args.mixed_precision else "no"
+        ], check=True, capture_output=True, text=True)
+        print("✓ accelerate配置文件已更新")
+    except subprocess.CalledProcessError as e:
+        print(f"⚠ 配置文件生成失败: {e}")
+        print("使用默认配置继续...")
+    
     # 构建accelerate launch命令
     cmd = [
         "accelerate", "launch",
         "--config_file", "default_config.yaml",
-        "--num_processes", str(num_processes),
-        "--multi_gpu",
-        "--mixed_precision", "fp16" if args.mixed_precision else "no",
         "scripts/train.py"
     ]
     

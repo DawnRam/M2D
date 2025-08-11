@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 修正版分布式训练脚本 - 解决GPU重复分配问题
+参考REPA-E的最佳实践
 """
 
 import os
@@ -9,6 +10,10 @@ import subprocess
 import argparse
 import torch
 from pathlib import Path
+
+# 添加项目根目录到Python路径
+project_root = Path(__file__).parent.parent
+sys.path.insert(0, str(project_root))
 
 def main():
     parser = argparse.ArgumentParser(description="修正版分布式训练")
@@ -55,11 +60,24 @@ def main():
     
     print(f"✓ 设置 CUDA_VISIBLE_DEVICES={gpu_ids_str}")
     
-    # 使用torch.distributed.launch而不是torchrun
+    # 首先生成合适的accelerate配置
+    print("生成accelerate配置文件...")
+    try:
+        setup_result = subprocess.run([
+            sys.executable, "scripts/setup_accelerate_config.py",
+            "--num_gpus", str(args.num_gpus),
+            "--mixed_precision", "fp16",
+            "--output", "distributed_config.yaml"
+        ], check=True, capture_output=True, text=True, cwd=project_root)
+        print("✓ accelerate配置文件已生成")
+    except subprocess.CalledProcessError as e:
+        print(f"⚠ 配置文件生成失败: {e}")
+        print("使用accelerate launch方式...")
+    
+    # 使用accelerate launch（推荐方式，参考REPA-E）
     cmd = [
-        sys.executable, "-m", "torch.distributed.launch",
-        "--nproc_per_node", str(args.num_gpus),
-        "--master_port", "29500",  # 使用不同的端口
+        "accelerate", "launch",
+        "--config_file", "distributed_config.yaml",
         "scripts/train.py",
         "--data_root", args.data_root,
         "--batch_size", str(args.batch_size),
