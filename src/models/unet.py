@@ -175,9 +175,23 @@ class SpatialTransformer(nn.Module):
         
         # Cross-attention（如果有context）
         if self.cross_attn is not None and context is not None:
+            # 确保context张量的维度正确
+            if context.dim() == 2:
+                # 如果context是[B, D]，需要扩展为[B, 1, D]
+                context = context.unsqueeze(1)
+            elif context.dim() == 1:
+                # 如果context是[D]，需要扩展为[1, 1, D]然后广播
+                context = context.unsqueeze(0).unsqueeze(0)
+                context = context.expand(B, 1, -1)
+            
+            # 检查维度是否匹配
+            if context.size(0) != B:
+                raise ValueError(f"Context batch size {context.size(0)} doesn't match input batch size {B}")
+            
             cross_out, _ = self.cross_attn(h, context, context)
             h = h + cross_out
-            h = self.norm_cross(h)
+            if self.norm_cross is not None:
+                h = self.norm_cross(h)
         
         # Feed Forward
         ff_out = self.ff(h)

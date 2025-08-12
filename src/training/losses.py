@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional, Tuple, Union, List
 import torchvision.transforms as transforms
 from torchvision.models import vgg19
 
@@ -66,53 +66,60 @@ class DiffusionLoss(nn.Module):
         }
 
 
+def mean_flat(x):
+    """
+    Take the mean over all non-batch dimensions.
+    Borrowed from REPA-E implementation.
+    """
+    return torch.mean(x, dim=list(range(1, len(x.size()))))
+
+
 class REPALoss(nn.Module):
-    """表示对齐损失（REPA Loss）"""
+    """表示对齐损失（REPA Loss）- 基于REPA-E实现"""
     
     def __init__(
         self,
-        alignment_type: str = "cosine",  # "cosine", "l2", "kl"
+        alignment_type: str = "projection",  # "projection", "cosine", "l2", "kl"
         temperature: float = 0.07,
-        normalize_features: bool = True
+        normalize_features: bool = True,
+        multi_layer: bool = True  # 是否支持多层特征对齐
     ):
         super().__init__()
         self.alignment_type = alignment_type
         self.temperature = temperature
         self.normalize_features = normalize_features
+        self.multi_layer = multi_layer
         
     def forward(
         self,
-        vae_features: torch.Tensor,
-        panderm_features: torch.Tensor,
+        vae_features: Union[torch.Tensor, List[torch.Tensor]],
+        panderm_features: Union[torch.Tensor, List[torch.Tensor]],
         feature_masks: Optional[torch.Tensor] = None
     ) -> Dict[str, torch.Tensor]:
         """
         计算表示对齐损失
         
         Args:
-            vae_features: VAE编码器特征 [B, D] 或 [B, H*W, D]
-            panderm_features: PanDerm特征 [B, D] 或 [B, N, D]  
+            vae_features: VAE编码器特征，可以是单个张量或张量列表（多层）
+            panderm_features: PanDerm特征，可以是单个张量或张量列表（多层）
             feature_masks: 特征掩码（可选）
         """
         
-        # 特征标准化
-        if self.normalize_features:
-            if vae_features.dim() == 3:  # 空间特征
-                vae_features = F.normalize(vae_features, p=2, dim=-1)
-            else:  # 全局特征
-                vae_features = F.normalize(vae_features, p=2, dim=-1)
-                
-            if panderm_features.dim() == 3:
-                panderm_features = F.normalize(panderm_features, p=2, dim=-1)
-            else:
-                panderm_features = F.normalize(panderm_features, p=2, dim=-1)
+        # 确保输入格式一致
+        if not isinstance(vae_features, list):
+            vae_features = [vae_features]
+        if not isinstance(panderm_features, list):
+            panderm_features = [panderm_features]
         
-        if self.alignment_type == "cosine":
-            loss = self._cosine_alignment_loss(vae_features, panderm_features, feature_masks)
+        if self.alignment_type == "projection":
+            loss = self._projection_alignment_loss(vae_features, panderm_features, feature_masks)
+        elif self.alignment_type == "cosine":
+            # 对于单层情况，使用原有的余弦相似度损失
+            loss = self._cosine_alignment_loss(vae_features[0], panderm_features[0], feature_masks)
         elif self.alignment_type == "l2":
-            loss = self._l2_alignment_loss(vae_features, panderm_features, feature_masks)
+            loss = self._l2_alignment_loss(vae_features[0], panderm_features[0], feature_masks)
         elif self.alignment_type == "kl":
-            loss = self._kl_alignment_loss(vae_features, panderm_features, feature_masks)
+            loss = self._kl_alignment_loss(vae_features[0], panderm_features[0], feature_masks)
         else:
             raise ValueError(f"Unknown alignment type: {self.alignment_type}")
         
@@ -120,6 +127,77 @@ class REPALoss(nn.Module):
             'repa_loss': loss,
             'alignment_type': self.alignment_type
         }
+    
+    def _projection_alignment_loss(
+        self,
+        vae_feats: List[torch.Tensor],
+        panderm_feats: List[torch.Tensor],
+        masks: Optional[torch.Tensor] = None
+    ) -> torch.Tensor:
+        """
+        投影对齐损失 - 基于REPA-E的实现
+        
+        这是REPA的核心损失函数，通过最大化不同特征空间中对应特征的余弦相似度来实现对齐
+        """
+        proj_loss = torch.tensor(0., device=vae_feats[0].device)
+        
+        # 确保两个特征列表长度相同
+        min_layers = min(len(vae_feats), len(panderm_feats))
+        vae_feats = vae_feats[:min_layers]
+        panderm_feats = panderm_feats[:min_layers]
+        
+        bsz = vae_feats[0].shape[0]
+        total_pairs = 0
+        
+        for i, (vae_feat, panderm_feat) in enumerate(zip(vae_feats, panderm_feats)):
+            # 标准化特征到单位球面
+            if self.normalize_features:
+                vae_feat = F.normalize(vae_feat, dim=-1)
+                panderm_feat = F.normalize(panderm_feat, dim=-1)
+            
+            # 处理不同维度的特征
+            if vae_feat.dim() == 2 and panderm_feat.dim() == 2:
+                # 全局特征 [B, D] vs [B, D]
+                similarity = (vae_feat * panderm_feat).sum(dim=-1)  # [B]
+                proj_loss += mean_flat(-similarity)
+                total_pairs += bsz
+                
+            elif vae_feat.dim() == 3 and panderm_feat.dim() == 2:
+                # 空间特征 [B, N, D] vs 全局特征 [B, D]
+                panderm_feat_expanded = panderm_feat.unsqueeze(1)  # [B, 1, D]
+                similarity = (vae_feat * panderm_feat_expanded).sum(dim=-1)  # [B, N]
+                
+                if masks is not None:
+                    similarity = similarity * masks
+                    proj_loss += -similarity.sum() / (masks.sum() + 1e-8)
+                else:
+                    proj_loss += mean_flat(-similarity)
+                total_pairs += bsz
+                
+            elif vae_feat.dim() == 3 and panderm_feat.dim() == 3:
+                # 空间特征 [B, N1, D] vs 空间特征 [B, N2, D]
+                B, N1, D = vae_feat.shape
+                N2 = panderm_feat.shape[1]
+                
+                if N1 == N2:
+                    # 相同序列长度，直接对应
+                    similarity = (vae_feat * panderm_feat).sum(dim=-1)  # [B, N]
+                    proj_loss += mean_flat(-similarity)
+                else:
+                    # 不同序列长度，使用注意力机制对齐
+                    attention = torch.matmul(vae_feat, panderm_feat.transpose(-2, -1)) / (D ** 0.5)
+                    attention = F.softmax(attention, dim=-1)  # [B, N1, N2]
+                    aligned_panderm = torch.matmul(attention, panderm_feat)  # [B, N1, D]
+                    similarity = (vae_feat * aligned_panderm).sum(dim=-1)  # [B, N1]
+                    proj_loss += mean_flat(-similarity)
+                
+                total_pairs += bsz
+        
+        # 平均化损失
+        if total_pairs > 0:
+            proj_loss = proj_loss / len(vae_feats)
+        
+        return proj_loss
     
     def _cosine_alignment_loss(
         self, 

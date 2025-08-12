@@ -1,7 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from typing import Tuple, Optional, Dict
+from typing import Tuple, Optional, Dict, Union, List
 import math
 
 
@@ -129,29 +129,44 @@ class VAEEncoder(nn.Module):
         self.norm_out = nn.GroupNorm(32, mid_channels)
         self.conv_out = nn.Conv2d(mid_channels, 2 * latent_channels, 3, padding=1)
     
-    def forward(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+    def forward(self, x: torch.Tensor, return_intermediate: bool = False) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]]:
         """
         Args:
             x: 输入图像 [B, C, H, W]
+            return_intermediate: 是否返回中间特征用于REPA对齐
             
         Returns:
-            mu: 均值 [B, latent_channels, H', W']
-            logvar: 对数方差 [B, latent_channels, H', W']
+            如果return_intermediate=False: (mu, logvar)
+            如果return_intermediate=True: (mu, logvar, intermediate_features)
         """
         h = self.conv_in(x)
+        intermediate_features = []
         
         # 下采样
-        for block in self.down_blocks:
+        for i, block in enumerate(self.down_blocks):
             if isinstance(block, nn.ModuleList):
                 for layer in block:
                     h = layer(h)
             else:
                 h = block(h)
+            
+            # 收集中间特征（在每个下采样阶段后）
+            if return_intermediate and not isinstance(block, nn.Conv2d):
+                # 将空间特征转换为序列格式以便对齐
+                B, C, H, W = h.shape
+                feat_seq = h.view(B, C, H * W).transpose(1, 2)  # [B, H*W, C]
+                intermediate_features.append(feat_seq)
         
         # 中间层
         h = self.mid_block1(h)
         h = self.mid_attn(h)
         h = self.mid_block2(h)
+        
+        # 收集最终的中间特征
+        if return_intermediate:
+            B, C, H, W = h.shape
+            feat_seq = h.view(B, C, H * W).transpose(1, 2)  # [B, H*W, C]
+            intermediate_features.append(feat_seq)
         
         # 输出
         h = self.norm_out(h)
@@ -160,7 +175,10 @@ class VAEEncoder(nn.Module):
         
         mu, logvar = torch.chunk(h, 2, dim=1)
         
-        return mu, logvar
+        if return_intermediate:
+            return mu, logvar, intermediate_features
+        else:
+            return mu, logvar
 
 
 class VAEDecoder(nn.Module):
@@ -291,11 +309,29 @@ class VAE(nn.Module):
         self.quant_conv = nn.Conv2d(2 * latent_channels, 2 * latent_channels, 1)
         self.post_quant_conv = nn.Conv2d(latent_channels, latent_channels, 1)
     
-    def encode(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
-        """编码"""
-        mu, logvar = self.encoder(x)
+    def encode(self, x: torch.Tensor, return_multi_layer: bool = False) -> Union[Tuple[torch.Tensor, torch.Tensor], Tuple[torch.Tensor, torch.Tensor, List[torch.Tensor]]]:
+        """
+        编码
+        
+        Args:
+            x: 输入图像 [B, C, H, W]
+            return_multi_layer: 是否返回多层特征（用于REPA对齐）
+            
+        Returns:
+            如果return_multi_layer=False: (mu, logvar)
+            如果return_multi_layer=True: (mu, logvar, intermediate_features)
+        """
+        if return_multi_layer:
+            mu, logvar, intermediate_features = self.encoder(x, return_intermediate=True)
+        else:
+            mu, logvar = self.encoder(x)
+            
         mu, logvar = torch.chunk(self.quant_conv(torch.cat([mu, logvar], dim=1)), 2, dim=1)
-        return mu, logvar
+        
+        if return_multi_layer:
+            return mu, logvar, intermediate_features
+        else:
+            return mu, logvar
     
     def decode(self, z: torch.Tensor) -> torch.Tensor:
         """解码"""

@@ -163,19 +163,54 @@ class PanDermFeatureExtractor(nn.Module):
     def forward(
         self, 
         x: torch.Tensor,
-        return_multi_scale: bool = False
+        return_multi_scale: bool = False,
+        return_repa_features: bool = False
     ) -> Dict[str, torch.Tensor]:
         """
         Args:
             x: 输入图像 [B, C, H, W]
             return_multi_scale: 是否返回多尺度特征
+            return_repa_features: 是否返回REPA对齐用的特征列表
             
         Returns:
             特征字典
         """
         B = x.shape[0]
         
-        if return_multi_scale and self.output_layers:
+        if return_repa_features:
+            # 返回用于REPA对齐的多层特征列表
+            features = {}
+            feature_list = []
+            
+            # 前向传播并收集中间特征
+            x_embed = self.backbone.patch_embed(x)  # [B, N, D]
+            x_embed = self.backbone._pos_embed(x_embed)
+            
+            # 收集每一层的空间特征用于对齐
+            for i, block in enumerate(self.backbone.blocks):
+                x_embed = block(x_embed)
+                
+                # 收集指定层的特征用于REPA对齐
+                if self.output_layers and i in self.output_layers:
+                    feature_list.append(x_embed.clone())  # [B, N, D] 保持空间特征
+                elif not self.output_layers and i % 3 == 0:  # 如果没有指定层，每3层收集一次
+                    feature_list.append(x_embed.clone())
+            
+            # 最终特征
+            x_embed = self.backbone.norm(x_embed)
+            feature_list.append(x_embed.clone())  # 添加最终的标准化特征
+            
+            # 全局特征
+            global_feature = x_embed.mean(dim=1)  # [B, D]
+            global_feature = self.feature_projection(global_feature)
+            
+            features['global'] = global_feature
+            features['spatial'] = x_embed
+            features['repa_features'] = feature_list  # 用于REPA对齐的多层特征列表
+            
+            return features
+            
+        elif return_multi_scale and self.output_layers:
             # 获取多尺度特征
             features = {}
             
@@ -460,6 +495,21 @@ class CrossAttentionBlock(nn.Module):
             key_value: [B, N_kv, D_kv]
             attention_mask: [B, N_q, N_kv]
         """
+        # 维度检查和修复
+        if query.dim() == 2:
+            # 如果query是[B, D]，扩展为[B, 1, D]
+            query = query.unsqueeze(1)
+        elif query.dim() == 1:
+            # 如果query是[D]，扩展为[1, 1, D]
+            query = query.unsqueeze(0).unsqueeze(0)
+            
+        if key_value.dim() == 2:
+            # 如果key_value是[B, D]，扩展为[B, 1, D]
+            key_value = key_value.unsqueeze(1)
+        elif key_value.dim() == 1:
+            # 如果key_value是[D]，扩展为[1, 1, D]
+            key_value = key_value.unsqueeze(0).unsqueeze(0)
+        
         B, N_q, D_q = query.shape
         N_kv = key_value.shape[1]
         

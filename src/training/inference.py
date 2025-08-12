@@ -38,6 +38,13 @@ class PanDermDiffusionPipeline:
         self.vae.eval()
         self.unet.eval()
     
+    def _get_model_attr(self, model, attr_name):
+        """安全地获取模型属性，处理DDP包装的情况"""
+        if hasattr(model, 'module'):
+            return getattr(model.module, attr_name)
+        else:
+            return getattr(model, attr_name)
+    
     @torch.no_grad()
     def generate(
         self,
@@ -138,7 +145,8 @@ class PanDermDiffusionPipeline:
             latents = scheduler_output['prev_sample']
         
         # 5. VAE解码
-        images = self.vae.decode(latents)
+        vae_decode = self._get_model_attr(self.vae, 'decode')
+        images = vae_decode(latents)
         
         # 6. 后处理
         images = self._postprocess_images(images)
@@ -191,8 +199,11 @@ class PanDermDiffusionPipeline:
             panderm_features = self.panderm_extractor(reference_images)['global']
         
         # 2. VAE编码初始图像
-        mu, logvar = self.vae.encode(init_images)
-        init_latents = self.vae.reparameterize(mu, logvar)
+        vae_encode = self._get_model_attr(self.vae, 'encode')
+        vae_reparameterize = self._get_model_attr(self.vae, 'reparameterize')
+        
+        mu, logvar = vae_encode(init_images)
+        init_latents = vae_reparameterize(mu, logvar)
         
         # 3. 设置调度器和时间步
         if isinstance(self.scheduler, DDIMScheduler):
@@ -241,7 +252,8 @@ class PanDermDiffusionPipeline:
             latents = scheduler_output['prev_sample']
         
         # 6. VAE解码
-        images = self.vae.decode(latents)
+        vae_decode = self._get_model_attr(self.vae, 'decode')
+        images = vae_decode(latents)
         
         # 7. 后处理
         images = self._postprocess_images(images)

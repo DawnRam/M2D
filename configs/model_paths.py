@@ -45,15 +45,38 @@ print(f"数据路径: {DATA_ROOT}")
 print(f"实验根目录: {EXPERIMENT_ROOT}")
 print("注意：实际输出目录将由实验管理器创建，格式为 [实验名称_时间戳]")
 
-# 验证数据路径
+# 验证数据路径 - 检查ISIC多类别数据集结构
 if os.path.exists(DATA_ROOT):
-    image_dir = os.path.join(DATA_ROOT, "images")
-    if os.path.exists(image_dir):
-        image_files = [f for f in os.listdir(image_dir) 
-                      if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))]
-        print(f"✓ 发现 {len(image_files)} 张图像文件")
+    # ISIC数据集的7个类别
+    isic_classes = ['AKIEC', 'BCC', 'BKL', 'DF', 'MEL', 'NV', 'VASC']
+    class_names_cn = {
+        'AKIEC': '光化性角化病',
+        'BCC': '基底细胞癌', 
+        'BKL': '良性角化病',
+        'DF': '皮肤纤维瘤',
+        'MEL': '黑色素瘤',
+        'NV': '色素痣',
+        'VASC': '血管病变'
+    }
+    
+    total_images = 0
+    found_classes = 0
+    
+    for class_name in isic_classes:
+        class_dir = os.path.join(DATA_ROOT, class_name)
+        if os.path.exists(class_dir):
+            image_files = [f for f in os.listdir(class_dir) 
+                          if f.lower().endswith(('.jpg', '.jpeg', '.png', '.bmp'))]
+            if image_files:
+                print(f"✓ {class_name} ({class_names_cn[class_name]}): {len(image_files)} 张图像")
+                total_images += len(image_files)
+                found_classes += 1
+    
+    if found_classes > 0:
+        print(f"✓ 发现 {found_classes}/{len(isic_classes)} 个类别，共 {total_images} 张图像")
     else:
-        print(f"⚠ 警告：图像目录不存在: {image_dir}")
+        print(f"⚠ 警告：未发现任何ISIC类别目录")
+        print("期望的类别目录：", ', '.join(isic_classes))
 else:
     print(f"⚠ 警告：数据根目录不存在: {DATA_ROOT}")
     print("请按照SETUP_GUIDE.md下载和配置ISIC数据集")

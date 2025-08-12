@@ -109,12 +109,17 @@ class PanDermDiffusionTrainer:
                 print(f"✓ 自动设置进程数为: {num_gpus}")
             
             # 打印GPU信息
-            for i in range(min(num_gpus, 4)):  # 只显示前4个GPU信息，避免输出过长
-                gpu_name = torch.cuda.get_device_name(i)
-                gpu_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
-                print(f"  GPU {i}: {gpu_name} ({gpu_memory:.1f}GB)")
-            if num_gpus > 4:
-                print(f"  ... 和其他 {num_gpus-4} 个GPU")
+            try:
+                available_gpus = torch.cuda.device_count()
+                for i in range(min(available_gpus, 4)):  # 只显示前4个GPU信息，避免输出过长
+                    gpu_name = torch.cuda.get_device_name(i)
+                    gpu_memory = torch.cuda.get_device_properties(i).total_memory / 1024**3
+                    print(f"  GPU {i}: {gpu_name} ({gpu_memory:.1f}GB)")
+                if available_gpus > 4:
+                    print(f"  ... 和其他 {available_gpus-4} 个GPU")
+            except Exception as e:
+                print(f"⚠ 获取GPU信息时出错: {e}")
+                print(f"✓ 检测到 {num_gpus} 个GPU设备，但无法获取详细信息")
         else:
             print("⚠ 未检测到CUDA设备，将使用CPU训练")
             self.config.distributed = False
@@ -314,23 +319,49 @@ class PanDermDiffusionTrainer:
             )
             self.logger.info("WandB可视化工具初始化完成")
     
+    def _get_model_attr(self, model, attr_name):
+        """安全地获取模型属性，处理DDP包装的情况"""
+        if hasattr(model, 'module'):
+            return getattr(model.module, attr_name)
+        else:
+            return getattr(model, attr_name)
+    
     def train_step(self, batch: Dict[str, torch.Tensor]) -> Dict[str, float]:
-        """单个训练步骤"""
+        """单个训练步骤 - 支持REPA对齐"""
         
         images = batch['image']  # [B, 3, H, W]
         batch_size = images.shape[0]
         
+        # 是否启用REPA对齐
+        enable_repa = getattr(self.config.training, 'enable_repa', False)
+        
         # 1. PanDerm特征提取
         with torch.no_grad() if self.config.model.panderm_freeze else torch.enable_grad():
-            panderm_features = self.panderm_extractor(images)['global']  # [B, D]
+            if enable_repa:
+                panderm_output = self.panderm_extractor(images, return_repa_features=True)
+                panderm_features = panderm_output['global']  # [B, D]
+                panderm_repa_features = panderm_output['repa_features']  # List[Tensor]
+            else:
+                panderm_features = self.panderm_extractor(images)['global']  # [B, D]
+                panderm_repa_features = None
         
         # 2. VAE编码
         with self.accelerator.accumulate(self.vae):
-            mu, logvar = self.vae.encode(images)
-            latents = self.vae.reparameterize(mu, logvar)  # [B, 4, H', W']
+            vae_encode = self._get_model_attr(self.vae, 'encode')
+            vae_reparameterize = self._get_model_attr(self.vae, 'reparameterize')
+            vae_decode = self._get_model_attr(self.vae, 'decode')
+            
+            if enable_repa:
+                # 获取VAE的多层特征用于REPA对齐
+                mu, logvar, vae_intermediate_features = vae_encode(images, return_multi_layer=True)
+            else:
+                mu, logvar = vae_encode(images)
+                vae_intermediate_features = None
+                
+            latents = vae_reparameterize(mu, logvar)  # [B, 4, H', W']
             
             # VAE重构（用于重构损失）
-            recon_images = self.vae.decode(latents)
+            recon_images = vae_decode(latents)
         
         # 3. 扩散过程
         with self.accelerator.accumulate(self.unet):
@@ -344,12 +375,26 @@ class PanDermDiffusionTrainer:
             noise = torch.randn_like(latents)
             noisy_latents = self.scheduler.add_noise(latents, noise, timesteps)
             
-            # UNet预测
-            model_output = self.unet(
-                noisy_latents,
-                timesteps,
-                panderm_features=panderm_features
-            )['sample']
+            # UNet预测 - 添加维度验证
+            try:
+                # 验证输入张量的维度
+                if getattr(self.config, 'debug', False):
+                    print(f"[DEBUG] noisy_latents shape: {noisy_latents.shape}")
+                    print(f"[DEBUG] timesteps shape: {timesteps.shape}")
+                    print(f"[DEBUG] panderm_features shape: {panderm_features.shape}")
+                
+                model_output = self.unet(
+                    noisy_latents,
+                    timesteps,
+                    panderm_features=panderm_features
+                )['sample']
+                
+            except Exception as e:
+                print(f"[ERROR] UNet forward pass failed: {e}")
+                print(f"[ERROR] noisy_latents shape: {noisy_latents.shape}")
+                print(f"[ERROR] timesteps shape: {timesteps.shape}")
+                print(f"[ERROR] panderm_features shape: {panderm_features.shape}")
+                raise e
         
         # 4. 计算损失
         loss_dict = self.criterion(
@@ -447,9 +492,13 @@ class PanDermDiffusionTrainer:
         panderm_features = self.panderm_extractor(images)['global']
         
         # VAE编码
-        mu, logvar = self.vae.encode(images)
-        latents = self.vae.reparameterize(mu, logvar)
-        recon_images = self.vae.decode(latents)
+        vae_encode = self._get_model_attr(self.vae, 'encode')
+        vae_reparameterize = self._get_model_attr(self.vae, 'reparameterize')
+        vae_decode = self._get_model_attr(self.vae, 'decode')
+        
+        mu, logvar = vae_encode(images)
+        latents = vae_reparameterize(mu, logvar)
+        recon_images = vae_decode(latents)
         
         # 扩散过程
         timesteps = torch.randint(
